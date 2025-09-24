@@ -1,0 +1,9 @@
+Sample,Added_ng_mL,PEC_found_ng_mL,Recovery_percent,RSD_percent
+Tap water,0.0,0.001,,4.56
+Tap water,0.01,0.011,97.33,2.41
+Tap water,1.0,1.177,117.54,3.54
+Tap water,100.0,117.287,117.29,3.4
+Experiment water,0.0,0.001,,4.49
+Experiment water,0.01,0.009,80.06,4.71
+Experiment water,1.0,1.027,102.58,4.39
+Experiment water,100.0,107.297,107.3,3.71
