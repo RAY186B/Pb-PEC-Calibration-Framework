@@ -1,31 +1,41 @@
 #!/usr/bin/env python3
 """
-Pb²⁺ Biosensor WLS Calibration 
-Features:
- - Strict input validation (minimum 3 points, 2 blanks, no negative concentrations)
- - Blank correction with mandatory blank replicates
- - Weighted Least Squares (WLS) per sample (weights from blank/replicate SD or user-specified default)
- - Bootstrap CIs for slope/intercept and LOD/LOQ (non-parametric, disabled for n < 6)
- - Residual diagnostics: standardized residuals, Q-Q plot, Cook's distance
- - Outlier detection and optional refitting without outliers
- - Saves detailed and simplified CSV results and publication-quality plots
- - Color-blind friendly plots (ColorBrewer palette)
- - Reproducible with fixed random seed
- - For reproducibility, deposit this script and requirements.txt to Zenodo/GitHub (e.g., https://zenodo.org).
+Pb²⁺ Biosensor Weighted Least Squares (WLS) Calibration
 
-Notes:
- - LOD/LOQ computed IUPAC-style: LOD = 3.3 * sd_blank / |slope|, LOQ = 10 * sd_blank / |slope|
- - Bootstrap uses resampled weights for heteroscedastic fits
- - Use --default_sd for fallback SD if blanks/replicates insufficient
- - Use --remove_outliers to refit excluding outliers (Cook's distance > 4/n)
- - Use --no_bootstrap to disable bootstrap explicitly
- - Use --unit to specify concentration units (default: ng/mL)
- - Do NOT use per-point RSD from same data as weights (circular). Use 'RSD_percent_external' column for external RSD estimates.
 
-## Acknowledgments
-Code developed by MD RAYHAN. Project led by Bingqian Liu.
-Date: 2025-09-22
-References: IUPAC recommendations for LOD/LOQ (Pure Appl. Chem., 2008, 80(2), 255-266)
+This script provides a reproducible calibration framework for Pb²⁺ biosensor
+data using Weighted Least Squares regression with optional bootstrap confidence
+intervals and residual diagnostics.
+
+Features
+
+- Strict input validation (≥3 calibration points, ≥2 blanks, no negative concentrations).
+- Mandatory blank correction with replicate support.
+- Weighted Least Squares (WLS) calibration, with weights from blank/replicate
+  standard deviation or user-specified defaults.
+- Non-parametric bootstrap CIs for slope, intercept, and LOD/LOQ
+  (disabled if n < 6).
+- Residual diagnostics: standardized residuals, Q–Q plot, and Cook's distance.
+- Outlier detection with optional refitting (Cook's distance > 4/n).
+- Publication-quality, color-blind-friendly plots (ColorBrewer palette).
+- Reproducibility ensured via fixed random seed and dependency tracking.
+
+Notes
+
+- LOD/LOQ follow IUPAC recommendations:
+  LOD = 3.3 * σ_blank / |slope|, LOQ = 10 * σ_blank / |slope|.
+- Bootstrap resamples include weights for heteroscedastic fits.
+- Use `--default_sd` for fallback SD if blanks/replicates are insufficient.
+- Use `--remove_outliers` to refit excluding high-influence points.
+- Use `--no_bootstrap` to disable bootstrap explicitly.
+- Use `--unit` to specify concentration units (default: ng/mL).
+- Do **not** use per-point RSD from the same data as weights (circularity).
+  Instead, use an `RSD_percent_external` column for external error estimates.
+
+Acknowledgments
+---------------
+Developed by MD RAYHAN. Project led by Bingqian Liu.
+
 """
 
 import sys
