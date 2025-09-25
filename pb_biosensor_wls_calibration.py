@@ -22,7 +22,8 @@ Notes:
  - Use --unit to specify concentration units (default: ng/mL)
  - Do NOT use per-point RSD from same data as weights (circular). Use 'RSD_percent_external' column for external RSD estimates.
 
-Author: Bingqian Liu et al.
+## Acknowledgments
+Code developed by MD RAYHAN. Project led by Bingqian Liu.
 Date: 2025-09-22
 References: IUPAC recommendations for LOD/LOQ (Pure Appl. Chem., 2008, 80(2), 255-266)
 """
