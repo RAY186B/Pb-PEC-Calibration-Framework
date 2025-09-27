@@ -1,41 +1,17 @@
 #!/usr/bin/env python3
+# DOI: https://doi.org/10.5281/zenodo.17212139
 """
-Pb²⁺ Biosensor Weighted Least Squares (WLS) Calibration
+Pb²⁺ Biosensor WLS Calibration
 
+Simple WLS calibration for Pb²⁺ biosensor data with bootstrap CIs and diagnostics.
+Uses fixed seed (42) for reproducibility. See README for details.
 
-This script provides a reproducible calibration framework for Pb²⁺ biosensor
-data using Weighted Least Squares regression with optional bootstrap confidence
-intervals and residual diagnostics.
+- Validates data (≥3 points, ≥2 blanks, no negatives).
+- Applies blank correction and WLS regression.
+- Computes LOD/LOQ (IUPAC: 3.3σ/|slope|, 10σ/|slope|).
+- Optional bootstrap and outlier removal via args.
 
-Features
-
-- Strict input validation (≥3 calibration points, ≥2 blanks, no negative concentrations).
-- Mandatory blank correction with replicate support.
-- Weighted Least Squares (WLS) calibration, with weights from blank/replicate
-  standard deviation or user-specified defaults.
-- Non-parametric bootstrap CIs for slope, intercept, and LOD/LOQ
-  (disabled if n < 6).
-- Residual diagnostics: standardized residuals, Q–Q plot, and Cook's distance.
-- Outlier detection with optional refitting (Cook's distance > 4/n).
-- Publication-quality, color-blind-friendly plots (ColorBrewer palette).
-- Reproducibility ensured via fixed random seed and dependency tracking.
-
-Notes
-
-- LOD/LOQ follow IUPAC recommendations:
-  LOD = 3.3 * σ_blank / |slope|, LOQ = 10 * σ_blank / |slope|.
-- Bootstrap resamples include weights for heteroscedastic fits.
-- Use `--default_sd` for fallback SD if blanks/replicates are insufficient.
-- Use `--remove_outliers` to refit excluding high-influence points.
-- Use `--no_bootstrap` to disable bootstrap explicitly.
-- Use `--unit` to specify concentration units (default: ng/mL).
-- Do **not** use per-point RSD from the same data as weights (circularity).
-  Instead, use an `RSD_percent_external` column for external error estimates.
-
-Acknowledgments
----------------
-Developed by MD RAYHAN. Project led by Bingqian Liu.
-
+Developed by MD RAYHAN, led by Bingqian Liu.
 """
 
 import sys
