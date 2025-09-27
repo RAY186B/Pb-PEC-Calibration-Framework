@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# DOI: https://doi.org/10.5281/zenodo.17212139
 """
 Pb²⁺ Biosensor WLS Calibration
 
