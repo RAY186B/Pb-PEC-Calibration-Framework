@@ -1,5 +1,6 @@
 # Pb²⁺ Biosensor Calibration Script
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17212395.svg)](https://doi.org/10.5281/zenodo.17212395)
 ![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen)
 
 ## Purpose
