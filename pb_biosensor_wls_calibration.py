@@ -5,12 +5,6 @@ Pb²⁺ Biosensor WLS Calibration
 Simple WLS calibration for Pb²⁺ biosensor data with bootstrap CIs and diagnostics.
 Uses fixed seed (42) for reproducibility. See README for details.
 
-CITATION:
-If you use this software, please cite it as:
-
-MD Rayhan & Bingqian Liu (2025).
-Pb²⁺ Biosensor Calibration Script (Version 1.0.0).
-Zenodo. https://doi.org/10.5281/zenodo.17212395
 """
 
 
