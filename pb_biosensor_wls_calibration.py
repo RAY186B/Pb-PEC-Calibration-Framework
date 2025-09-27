@@ -10,7 +10,12 @@ Uses fixed seed (42) for reproducibility. See README for details.
 - Computes LOD/LOQ (IUPAC: 3.3σ/|slope|, 10σ/|slope|).
 - Optional bootstrap and outlier removal via args.
 
-Developed by MD RAYHAN, led by Bingqian Liu.
+CITATION:
+If you use this software, please cite it as:
+
+MD Rayhan & Bingqian Liu (2025).
+Pb²⁺ Biosensor Calibration Script (Version 1.0.0).
+Zenodo. https://doi.org/10.5281/zenodo.17212395
 """
 
 import sys
