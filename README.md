@@ -1,7 +1,7 @@
 ```markdown
 # Pb²⁺ Biosensor Calibration Script
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17212395.svg)](https://doi.org/10.5281/zenodo.17212395)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17218702.svg)](https://doi.org/10.5281/zenodo.17218702)
 ![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen)
 ![Python](https://img.shields.io/badge/python-≥3.8-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
