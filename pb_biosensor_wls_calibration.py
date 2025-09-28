@@ -2,280 +2,495 @@
 """
 Pb²⁺ Biosensor WLS Calibration
 
-Simple WLS calibration for Pb²⁺ biosensor data with bootstrap CIs and diagnostics.
-Uses fixed seed (42) for reproducibility. See README for details.
+Weighted Least Squares calibration for Pb²⁺ biosensor data with LOD/LOQ calculation.
 
+CITATION:
+MD Rayhan & Bingqian Liu (2025).
+Pb²⁺ Biosensor Calibration Script.
+Zenodo. https://doi.org/10.5281/zenodo.17212395
+
+Dependencies:
+- Python ≥ 3.8
+- numpy
+- pandas
+- matplotlib
+- statsmodels
+- scikit-learn
 """
-
-
 from __future__ import annotations
 
 import argparse
 import logging
-import math
 import os
 import re
-from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+import sys
+import tempfile
+import uuid
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
+import matplotlib
+matplotlib.use("Agg")  # head-less safe
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
+from sklearn.metrics import mean_absolute_error, mean_squared_error
 
-# -------------------------
-# Constants / Configuration
-# -------------------------
-IUPAC_LLOD_FACTOR: float = 3.3
-IUPAC_LLOQ_FACTOR: float = 10.0
-DEFAULT_CONFIDENCE: float = 0.975
-BOOTSTRAP_DEFAULT: int = 2000
-BOOTSTRAP_MIN: int = 1000
-EPSILON: float = 1e-12
-MAX_BOOTSTRAP_ITERS: int = 100_000
-FILENAME_SANITIZE_REGEX = r"[^\\w\\-_.]"
-LOG_FORMAT = "%(asctime)s %(levelname)s: %(message)s"
+# ---------- constants ----------
+IUPAC_LOD_FACTOR: float = 3.3
+IUPAC_LOQ_FACTOR: float = 10.0
+DEFAULT_SEED: int = 42
+VALID_UNITS: List[str] = ["ng/mL", "ug/L", "μg/L", "mg/L", "ppm", "ppb"]
+UNIT_SCALE_TO_NG_PER_ML: Dict[str, float] = {
+    "ng/mL": 1.0,
+    "ug/L": 1.0,   # 1 µg/L = 1 ng/mL
+    "μg/L": 1.0,
+    "mg/L": 1e6,
+    "ppm": 1e6,    # aqueous approx
+    "ppb": 1e3,
+}
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
+# ---------- logging ----------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
 logger = logging.getLogger(__name__)
 
-# -------------------------
-# Data structures
-# -------------------------
-@dataclass
-class FitResult:
-    slope: float
-    intercept: float
-    slope_se: float
-    intercept_se: float
-    conf_int: Optional[np.ndarray] = None
 
-# -------------------------
-# Helpers / Validation
-# -------------------------
-def sanitize_filename(name: str) -> str:
-    safe = re.sub(FILENAME_SANITIZE_REGEX, "_", name)
-    safe = re.sub(r"_+", "_", safe).strip("_")
-    return safe or "file"
+# ---------- helpers ----------
+def safe_sample_name(name: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", name.strip())
+    return safe or str(uuid.uuid4())
 
-def validate_dataframe(df: pd.DataFrame, required_columns: Tuple[str, ...]) -> None:
-    if df is None:
-        raise ValueError("Input dataframe is None")
-    missing = [c for c in required_columns if c not in df.columns]
-    if missing:
-        raise ValueError(f"Missing required columns: {missing}")
-    if df.shape[0] == 0:
-        raise ValueError("Input dataframe is empty")
 
-def ensure_positive_weights(weights: np.ndarray) -> None:
-    if not np.all(np.isfinite(weights)):
-        raise ValueError("Weights contain non-finite values (inf or NaN)")
-    if np.any(weights <= 0):
-        raise ValueError("Weights must be strictly positive; zero/negative found")
+def ascii_unit(unit: str) -> str:
+    return unit.replace("μ", "u")
 
-def safe_divide(numerator: float, denominator: float, default: float = math.nan) -> float:
-    if abs(denominator) <= EPSILON:
-        return default
-    return numerator / denominator
 
-# -------------------------
-# Core numerical routines
-# -------------------------
-def compute_weights_from_sd(sd_y_vec: np.ndarray) -> np.ndarray:
-    sd = np.asarray(sd_y_vec, dtype=float)
-    if sd.size == 0:
-        raise ValueError("sd_y_vec is empty")
-    if np.any(~np.isfinite(sd)):
-        raise ValueError("sd_y_vec contains non-finite values")
-    if np.any(sd <= 0.0):
-        raise ValueError("sd_y_vec must be positive for weight calculation")
-    weights = 1.0 / (sd ** 2)
-    ensure_positive_weights(weights)
-    return weights
+# ---------- io ----------
+def load_data(csv_path: str) -> Tuple[pd.DataFrame, Dict[str, str]]:
+    path = Path(csv_path)
+    if not path.exists():
+        raise FileNotFoundError(f"No CSV at {path}")
 
-def fit_weighted_ls(x: np.ndarray, y: np.ndarray, weights: np.ndarray) -> FitResult:
-    if x.ndim != 1 or y.ndim != 1 or weights.ndim != 1:
-        raise ValueError("x, y, weights must be 1D arrays")
-    n = x.size
-    if n == 0:
-        raise ValueError("Empty arrays provided for regression")
-    if not (x.size == y.size == weights.size):
-        raise ValueError("x, y, and weights must have the same length")
-
-    X = sm.add_constant(x)
-
-    try:
-        wls_model = sm.WLS(y, X, weights=weights)
-        wls_res = wls_model.fit()
-    except np.linalg.LinAlgError as ex:
-        logger.exception("Linear algebra error during WLS fit")
-        raise
-    except Exception as ex:
-        logger.exception("Unexpected error during WLS fit: %s", ex)
-        raise
-
-    params = wls_res.params
-    bse = wls_res.bse
-    intercept, slope = float(params[0]), float(params[1])
-    intercept_se, slope_se = float(bse[0]), float(bse[1])
-
-    if abs(slope) <= EPSILON:
-        logger.warning("Slope near zero (abs(slope) <= %g). Estimates may be unstable.", EPSILON)
-
-    return FitResult(slope=slope, intercept=intercept, slope_se=slope_se, intercept_se=intercept_se)
-
-def bootstrap_fit(x: np.ndarray, y: np.ndarray, weights: np.ndarray, n_iter: int = BOOTSTRAP_DEFAULT,
-                  rng: Optional[np.random.Generator] = None) -> Dict[str, np.ndarray]:
-    if n_iter < BOOTSTRAP_MIN:
-        raise ValueError(f"n_iter must be >= {BOOTSTRAP_MIN}")
-    if n_iter > MAX_BOOTSTRAP_ITERS:
-        raise ValueError(f"n_iter too large; max allowed is {MAX_BOOTSTRAP_ITERS}")
-
-    n = x.size
-    if n == 0:
-        raise ValueError("Cannot bootstrap empty dataset")
-
-    rng = rng or np.random.default_rng()
-
-    slopes = np.empty(n_iter, dtype=float)
-    intercepts = np.empty(n_iter, dtype=float)
-
-    if np.allclose(x, x[0]):
-        raise ValueError("Independent variable x has no variation; bootstrap undefined")
-
-    for i in range(n_iter):
-        idx = rng.choice(n, size=n, replace=True)
-        xi = x[idx]
-        yi = y[idx]
-        wi = weights[idx]
+    for enc in ("utf-8", "utf-8-sig", "latin-1", "cp1252"):
         try:
-            res = fit_weighted_ls(xi, yi, wi)
-            slopes[i] = res.slope
-            intercepts[i] = res.intercept
-        except Exception as ex:
-            logger.debug("Bootstrap iteration %d failed: %s", i, ex)
-            slopes[i] = math.nan
-            intercepts[i] = math.nan
-
-    good = np.isfinite(slopes) & np.isfinite(intercepts)
-    if good.sum() < max(10, int(0.05 * n_iter)):
-        logger.warning("Only %d/%d bootstrap samples succeeded", good.sum(), n_iter)
-    return {"slope": slopes[good], "intercept": intercepts[good]}
-
-# -------------------------
-# High-level pipeline
-# -------------------------
-def process_group(df: pd.DataFrame, x_col: str, y_col: str, sd_col: str,
-                  bootstrap_iters: int = BOOTSTRAP_DEFAULT,
-                  ci_level: float = DEFAULT_CONFIDENCE) -> Dict[str, object]:
-    validate_dataframe(df, (x_col, y_col, sd_col))
-
-    x = df[x_col].to_numpy(dtype=float)
-    y = df[y_col].to_numpy(dtype=float)
-    sd = df[sd_col].to_numpy(dtype=float)
-
-    mask = np.isfinite(x) & np.isfinite(y) & np.isfinite(sd)
-    if not mask.any():
-        raise ValueError("All rows contain NaN or non-finite values in required columns")
-    if mask.sum() < df.shape[0]:
-        logger.info("Dropping %d/%d rows with NaN in required columns", df.shape[0] - mask.sum(), df.shape[0])
-    x, y, sd = x[mask], y[mask], sd[mask]
-
-    weights = compute_weights_from_sd(sd)
-    fit = fit_weighted_ls(x, y, weights)
-    bootstrap_res = bootstrap_fit(x, y, weights, n_iter=bootstrap_iters)
-
-    ci = None
-    if bootstrap_res["slope"].size >= 1000:
-        alpha = 1.0 - ci_level
-        lower = np.percentile(bootstrap_res["slope"], 100 * alpha / 2.0)
-        upper = np.percentile(bootstrap_res["slope"], 100 * (1.0 - alpha / 2.0))
-        ci = np.array([lower, upper])
+            df = pd.read_csv(path, encoding=enc)
+            break
+        except UnicodeDecodeError:
+            continue
     else:
-        logger.warning("Not enough bootstrap slope samples (%d) to compute reliable CI", bootstrap_res["slope"].size)
+        raise ValueError("Could not decode CSV file")
 
-    lod = None
-    loq = None
-    # Placeholder: replace with actual blank SD calculation
+    if df.empty:
+        raise ValueError("CSV file is empty")
+
+    column_map = detect_columns(df)
+    validate_data(df, column_map)
+    logger.info(f"Loaded {len(df)} rows")
+    return df, column_map
+
+
+def detect_columns(df: pd.DataFrame) -> Dict[str, str]:
+    required = {
+        "Sample": ["Sample", "sample", "Sample_Name", "SampleName", "sample_name"],
+        "Added_ng_mL": ["Added_ng_mL", "added_ng_ml", "Added", "added", "Spike_ng_mL"],
+        "PEC_found_ng_mL": ["PEC_found_ng_mL", "found_ng_ml", "Found", "found", "Measured_ng_mL"],
+    }
+    column_map: Dict[str, str] = {}
+    for std, variants in required.items():
+        for v in variants:
+            if v in df.columns:
+                column_map[std] = v
+                break
+        else:
+            raise ValueError(f"Required column '{std}' not found. Columns: {list(df.columns)}")
+
+    optional = {"RSD_percent": ["RSD_percent", "RSD", "rsd_percent", "RSD_percent_external"]}
+    for std, variants in optional.items():
+        for v in variants:
+            if v in df.columns:
+                column_map[std] = v
+                break
+    return column_map
+
+
+def validate_data(df: pd.DataFrame, column_map: Dict[str, str]) -> None:
+    conc = column_map["Added_ng_mL"]
+    found = column_map["PEC_found_ng_mL"]
+    for col in (conc, found):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+        if df[col].isna().any():
+            raise ValueError(f"Non-numeric values in {col}")
+        if np.isinf(df[col]).any():
+            raise ValueError(f"Infinite values in {col}")
+        if (df[col] < 0).any():
+            raise ValueError(f"Negative concentrations in {col}")
+
+    if "RSD_percent" in column_map:
+        rsd_col = column_map["RSD_percent"]
+        df[rsd_col] = pd.to_numeric(df[rsd_col], errors="coerce")
+        bad = df[rsd_col].dropna()
+        if len(bad) and ((bad < 0) | (bad > 100)).any():
+            logger.warning("Clipping RSD values to 0–100 %")
+            df[rsd_col] = df[rsd_col].clip(0, 100)
+
+
+def validate_group(group: pd.DataFrame, column_map: Dict[str, str]) -> None:
+    if group.empty:
+        raise ValueError("Group is empty")
+    conc = column_map["Added_ng_mL"]
+    name = str(group[column_map["Sample"]].iat[0])
+    if len(group) < 3:
+        raise ValueError(f"{name}: need ≥ 3 points")
+    if group[conc].nunique() < 2:
+        raise ValueError(f"{name}: need ≥ 2 distinct concentrations")
+    blanks = (group[conc] == 0.0).sum()
+    if blanks < 2:
+        raise ValueError(f"{name}: need ≥ 2 blank replicates")
+
+
+# ---------- calibration ----------
+def compute_lod_loq(blank_sd: float, slope: float, min_slope: float) -> Tuple[float, float]:
+    if not (np.isfinite(blank_sd) and blank_sd >= 0):
+        raise ValueError("Invalid blank SD")
+    if not np.isfinite(slope):
+        raise ValueError("Invalid slope")
+    if abs(slope) < min_slope:
+        raise ValueError(f"Slope too small for LOD/LOQ (|slope| < {min_slope})")
+    if blank_sd == 0:
+        logger.warning("Zero blank SD → LOD/LOQ = 0")
+        return 0.0, 0.0
+    lod = IUPAC_LOD_FACTOR * blank_sd / abs(slope)
+    loq = IUPAC_LOQ_FACTOR * blank_sd / abs(slope)
+    return lod, loq
+
+
+def estimate_noise_sd(
+    group: pd.DataFrame,
+    default_sd: Optional[float],
+    column_map: Dict[str, str],
+    fallback_frac: float,
+) -> float:
+    if default_sd is not None and default_sd > 0 and np.isfinite(default_sd):
+        return default_sd
+
+    found = column_map["PEC_found_ng_mL"]
+    conc = column_map["Added_ng_mL"]
+    stds = group.groupby(conc)[found].std().dropna()
+    if len(stds):
+        return float(stds.mean())
+
+    mean_resp = group[found].mean()
+    if mean_resp == 0:
+        logger.warning("All responses zero; using fallback SD = 0.01 ng/mL")
+        return 0.01
+    return float(mean_resp * fallback_frac)
+
+
+def wls_calibration(
+    group: pd.DataFrame,
+    sd_y: float,
+    outdir: str,
+    unit: str,
+    column_map: Dict[str, str],
+    rsd_clip: Tuple[float, float],
+    small_number: float,
+    min_slope: float,
+) -> Dict[str, Any]:
+    sample = str(group[column_map["Sample"]].iat[0])
+    conc = column_map["Added_ng_mL"]
+    found = column_map["PEC_found_ng_mL"]
+
+    # blanks
+    blanks = group[group[conc] == 0.0][found].dropna()
+    if len(blanks) < 2:
+        raise ValueError("Need ≥ 2 blank replicates")
+    blank_mean = float(blanks.mean())
+    blank_sd = float(blanks.std(ddof=1))
+
+    # prepare data
+    g = group.copy()
+    g["Found_corr"] = g[found] - blank_mean
+    negs = (g["Found_corr"] < 0).sum()
+    if negs > len(g) * 0.1:
+        logger.warning(f"{sample}: {negs} negative corrected values")
+
+    X = g[conc].to_numpy(dtype=float)
+    y = g["Found_corr"].to_numpy(dtype=float)
+
+    # weights
+    if "RSD_percent" in column_map and column_map["RSD_percent"] in g.columns:
+        rsd_col = column_map["RSD_percent"]
+        rsd = g[rsd_col].fillna(1.0).clip(*rsd_clip).to_numpy() / 100.0
+        resp = g[found].replace(0, blank_mean).to_numpy()
+        resp = np.maximum(resp, small_number)
+        sd_vals = np.maximum(rsd * resp, small_number)
+        weights = 1.0 / (sd_vals ** 2)
+        logger.info(f"{sample}: RSD-based weighting")
+    else:
+        if sd_y <= 0 or not np.isfinite(sd_y):
+            logger.warning(f"{sample}: invalid SD, using equal weights")
+            weights = np.ones_like(y)
+        else:
+            weights = np.full_like(y, 1.0 / (sd_y ** 2))
+
+    # fit
+    X_design = sm.add_constant(X)
+    model = sm.WLS(y, X_design, weights=weights).fit()
+    if np.any(~np.isfinite(model.bse)):
+        raise RuntimeError(f"{sample}: perfect multicollinearity – need more distinct concentrations")
+
+    intercept, slope = model.params
+    intercept_se, slope_se = model.bse
+
+    # metrics
+    y_pred = model.predict(X_design)
+    mae = mean_absolute_error(y, y_pred)
+    rmse = np.sqrt(mean_squared_error(y, y_pred))
+    ss_res = np.sum((y - y_pred) ** 2)
+    ss_tot = np.sum((y - np.mean(y)) ** 2)
+    r2 = np.nan if ss_tot == 0 else 1 - (ss_res / ss_tot)
+
+    # LOD/LOQ
+    lod, loq = compute_lod_loq(blank_sd, slope, min_slope)
+
+    # scale back to user unit
+    user_scale = UNIT_SCALE_TO_NG_PER_ML.get(unit.replace("μ", "u"), 1.0)
+    lod_scaled = lod / user_scale
+    loq_scaled = loq / user_scale
+
+    # plot
+    out_path = Path(outdir) / safe_sample_name(sample)
+    out_path.mkdir(parents=True, exist_ok=True)
+    plot_path = out_path / "calibration_plot.png"
+
+    fig, ax = plt.subplots(figsize=(8, 6))
     try:
-        if abs(fit.slope) > EPSILON:
-            lod = safe_divide(IUPAC_LLOD_FACTOR * fit.intercept_se, fit.slope)
-            loq = safe_divide(IUPAC_LLOQ_FACTOR * fit.intercept_se, fit.slope)
-    except Exception:
-        lod = None
-        loq = None
+        ax.scatter(g[found] / user_scale, (y_pred + blank_mean) / user_scale,
+                   color="#0072B2", s=60, label="Data")
+        min_v = min(g[found].min(), float((y_pred + blank_mean).min())) / user_scale
+        max_v = max(g[found].max(), float((y_pred + blank_mean).max())) / user_scale
+        ax.plot([min_v, max_v], [min_v, max_v], "r--", lw=2, label="1:1 line")
+        ax.set_xlabel(f"Measured Pb²⁺ ({unit})")
+        ax.set_ylabel(f"Fitted Pb²⁺ ({unit})")
+        ax.set_title(f"Calibration – {sample}")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+        fig.savefig(plot_path, dpi=300, bbox_inches="tight")
+    finally:
+        plt.close(fig)
 
-    return {"fit": fit, "bootstrap": bootstrap_res, "slope_ci": ci, "lod": lod, "loq": loq}
+    return {
+        "sample": sample,
+        "n_points": len(g),
+        "blank_mean": blank_mean / user_scale,
+        "blank_sd": blank_sd / user_scale,
+        "slope": float(slope),          # dimensionless – do NOT scale
+        "slope_se": float(slope_se),
+        "intercept": float(intercept) / user_scale,
+        "intercept_se": float(intercept_se) / user_scale,
+        "r_squared": float(r2),
+        "mae": float(mae) / user_scale,
+        "rmse": float(rmse) / user_scale,
+        "lod": lod_scaled,
+        "loq": loq_scaled,
+        "plot_path": str(plot_path),
+    }
 
-# -------------------------
-# CLI and I/O
-# -------------------------
-def load_csv(path: str) -> pd.DataFrame:
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Data file not found: {path}")
+
+# ---------- results ----------
+def save_results(results: List[Dict[str, Any]], output_dir: str, unit: str) -> None:
+    out_path = Path(output_dir)
     try:
-        return pd.read_csv(path)
-    except Exception as ex:
-        logger.exception("Failed to read CSV: %s", ex)
-        raise ValueError(f"Failed to parse CSV: {ex}")
+        out_path.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise RuntimeError(f"Cannot create output directory: {e}") from e
 
-def main(argv: Optional[list[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Pb-PEC Calibration: robust WLS + bootstrap")
-    parser.add_argument("data_csv", help="Path to input CSV file")
-    parser.add_argument("--x-col", default="conc", help="Name of concentration column")
-    parser.add_argument("--y-col", default="signal", help="Name of signal column")
-    parser.add_argument("--sd-col", default="sd_y", help="Name of per-point SD column")
-    parser.add_argument("--group-col", default=None, help="Optional column name to group samples")
-    parser.add_argument("--bootstrap", type=int, default=BOOTSTRAP_DEFAULT, help=f"Bootstrap iterations (default {BOOTSTRAP_DEFAULT})")
-    parser.add_argument("--ci", type=float, default=DEFAULT_CONFIDENCE, help=f"Confidence level (two-sided); default {DEFAULT_CONFIDENCE}")
-    parser.add_argument("--out-dir", default="./results", help="Output directory for artifacts")
-    args = parser.parse_args(argv)
+    ascii_u = ascii_unit(unit)
+    rows = [
+        {
+            "Sample": r["sample"],
+            "n_points": r["n_points"],
+            f"blank_mean ({ascii_u})": r["blank_mean"],
+            f"blank_sd ({ascii_u})": r["blank_sd"],
+            "slope": r["slope"],
+            "slope_se": r["slope_se"],
+            f"intercept ({ascii_u})": r["intercept"],
+            "intercept_se": r["intercept_se"],
+            "r_squared": r["r_squared"],
+            f"mae ({ascii_u})": r["mae"],
+            f"rmse ({ascii_u})": r["rmse"],
+            f"lod ({ascii_u})": r["lod"],
+            f"loq ({ascii_u})": r["loq"],
+        }
+        for r in results
+    ]
+    df = pd.DataFrame(rows)
+    df.to_csv(out_path / "calibration_results.csv", index=False)
+    df[["Sample", "slope", f"lod ({ascii_u})", f"loq ({ascii_u})", "r_squared"]].to_csv(
+        out_path / "simple_results.csv", index=False
+    )
+    logger.info(f"Results saved to {out_path.resolve()}")
 
-    df = load_csv(args.data_csv)
 
-    group_col = args.group_col
-    if group_col and group_col not in df.columns:
-        logger.error("Group column '%s' not found in data", group_col)
-        return 2
+def create_demo_data() -> pd.DataFrame:
+    # Synthetic data for quick sanity check only – not used in any real calibration
+    return pd.DataFrame(
+        {
+            "Sample": ["Tap water"] * 5 + ["Experiment water"] * 5,
+            "Added_ng_mL": [0.0, 0.0, 0.01, 1.0, 100.0] * 2,
+            "PEC_found_ng_mL": [
+                0.001,
+                0.0012,
+                0.011,
+                1.177,
+                117.287,
+                0.001,
+                0.0011,
+                0.009,
+                1.027,
+                107.297,
+            ],
+            "Recovery_percent": [np.nan, np.nan, 97.33, 117.54, 117.29,
+                                 np.nan, np.nan, 80.06, 102.58, 107.3],
+            "RSD_percent": [4.56, 4.60, 2.41, 3.54, 3.4,
+                            4.49, 4.50, 4.71, 4.39, 3.71],
+        }
+    )
 
-    os.makedirs(args.out_dir, exist_ok=True)
 
-    grouped = df.groupby(group_col) if group_col else [("__all__", df)]
-    overall_results = {}
+# ---------- CLI ----------
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Pb²⁺ Biosensor WLS Calibration\n\n"
+        "Examples:\n"
+        "  python calibrate.py data.csv --unit ng/mL --outdir results\n"
+        "  python calibrate.py data.csv --unit μg/L --outdir out_ugL\n"
+        "  python calibrate.py --demo",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("csv", nargs="?", help="Input CSV file")
+    parser.add_argument("--outdir", default="calibration_results", help="Output directory")
+    parser.add_argument("--default-sd", type=float, help="Default measurement SD (ng/mL)")
+    parser.add_argument(
+        "--unit",
+        choices=VALID_UNITS,
+        default="ng/mL",
+        help="Concentration unit (outputs scaled to this unit)",
+    )
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="Random seed")
+    parser.add_argument("--demo", action="store_true", help="Run with demo dataset")
+    parser.add_argument("--verbose", action="store_true", help="Verbose logging")
+    parser.add_argument(
+        "--min-slope",
+        type=float,
+        default=1e-12,
+        help="Minimum |slope| for meaningful LOD/LOQ (empirical default, Anal Chem 1983)",
+    )
+    parser.add_argument(
+        "--small-number",
+        type=float,
+        default=1e-9,
+        help="Epsilon against div-by-zero in weighting (empirical default)",
+    )
+    parser.add_argument(
+        "--fallback-fraction",
+        type=float,
+        default=0.05,
+        help="Fallback noise SD = fraction of mean response (empirical default)",
+    )
+    parser.add_argument(
+        "--rsd-clip",
+        nargs=2,
+        type=float,
+        metavar=("MIN", "MAX"),
+        default=(0.1, 99.9),
+        help="Clip RSD (%%) before converting to weight",
+    )
 
-    for name, group_df in grouped:
-        safe_name = sanitize_filename(str(name))
-        try:
-            res = process_group(group_df, args.x_col, args.y_col, args.sd_col,
-                                bootstrap_iters=args.bootstrap, ci_level=args.ci)
-            overall_results[safe_name] = res
-            logger.info("Processed group '%s': slope=%.6g intercept=%.6g", safe_name, res["fit"].slope, res["fit"].intercept)
-        except Exception as ex:
-            logger.exception("Failed to process group '%s': %s", safe_name, ex)
+    args = parser.parse_args()
+    logger = logging.getLogger(__name__)
+    if args.verbose:
+        logger.setLevel(logging.DEBUG)
 
-    summary_rows = []
-    for gname, res in overall_results.items():
-        fit: FitResult = res["fit"]
-        lod = res.get("lod")
-        loq = res.get("loq")
-        slope_ci = res.get("slope_ci")
-        summary_rows.append({
-            "group": gname,
-            "slope": fit.slope,
-            "slope_se": fit.slope_se,
-            "intercept": fit.intercept,
-            "intercept_se": fit.intercept_se,
-            "slope_ci_low": float(slope_ci[0]) if slope_ci is not None else math.nan,
-            "slope_ci_high": float(slope_ci[1]) if slope_ci is not None else math.nan,
-            "lod": lod if lod is not None else math.nan,
-            "loq": loq if loq is not None else math.nan,
-        })
+    # validate numeric args
+    for name, val in (
+        ("--min-slope", args.min_slope),
+        ("--small-number", args.small_number),
+        ("--fallback-fraction", args.fallback_fraction),
+    ):
+        if val <= 0 or not np.isfinite(val):
+            parser.error(f"{name} must be positive and finite")
 
-    summary_df = pd.DataFrame(summary_rows)
-    out_path = os.path.join(args.out_dir, "calibration_summary.csv")
-    summary_df.to_csv(out_path, index=False)
-    logger.info("Wrote summary to %s", out_path)
-    return 0
+    tmp_path: Optional[Path] = None
+    try:
+        if args.demo:
+            logger.info("Creating and using demo dataset")
+            tmp_file = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".csv", delete=False, prefix="pb_demo_", dir=tempfile.gettempdir()
+            )
+            tmp_path = Path(tmp_file.name)
+            create_demo_data().to_csv(tmp_file, index=False)
+            tmp_file.close()
+            csv = str(tmp_path)
+        else:
+            if not args.csv:
+                parser.error("Must provide CSV file or use --demo")
+            csv = args.csv
+
+        df, colmap = load_data(csv)
+        unit_scale = UNIT_SCALE_TO_NG_PER_ML.get(args.unit.replace("μ", "u"), 1.0)
+        if unit_scale != 1.0:
+            logger.info(f"Scaling concentrations to ng/mL (factor {unit_scale})")
+            df[colmap["Added_ng_mL"]] *= unit_scale
+            df[colmap["PEC_found_ng_mL"]] *= unit_scale
+            validate_data(df, colmap)
+
+        results: List[Dict[str, Any]] = []
+        for sample, group in df.groupby(colmap["Sample"]):
+            try:
+                validate_group(group, colmap)
+                sd_est = estimate_noise_sd(
+                    group, args.default_sd, colmap, args.fallback_fraction
+                )
+                res = wls_calibration(
+                    group=group,
+                    sd_y=sd_est,
+                    outdir=args.outdir,
+                    unit=args.unit,
+                    column_map=colmap,
+                    rsd_clip=args.rsd_clip,
+                    small_number=args.small_number,
+                    min_slope=args.min_slope,
+                )
+                results.append(res)
+            except Exception as e:
+                logger.exception(f"Skipping sample '{sample}': {e}")
+                continue
+
+        if not results:
+            logger.error("No successful calibrations")
+            sys.exit(1)
+
+        save_results(results, args.outdir, args.unit)
+        logger.info(f"Done – results in {Path(args.outdir).resolve()}")
+
+    except Exception as e:
+        logger.exception("Fatal error")
+        sys.exit(1)
+
+    finally:
+        if tmp_path is not None:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                logger.debug("Temp demo file left for inspection")
+
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()
