@@ -226,7 +226,7 @@ Contact
 
 For questions or issues:
 - Open an issue on GitHub
-- Email: [repository maintainer]
+- Email: [mdrayhan.186b@qq.com]
 
 ---
 
