@@ -3,7 +3,7 @@ cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 title: "Pb²⁺ Biosensor Calibration Script"
 version: "1.0.0"
-doi: "10.5281/zenodo.17218702"
+doi: "10.5281/zenodo.17220484"
 date-released: "2025-09-27"
 repository-code: "https://github.com/RAY186B/Pb-PEC-Calibration-Framework"
 
