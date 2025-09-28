@@ -1,7 +1,7 @@
 ```markdown
 # Pb²⁺ Biosensor Calibration Script
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17218702.svg)](https://doi.org/10.5281/zenodo.17218702)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17220484.svg)](https://doi.org/10.5281/zenodo.17220484)
 ![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen)
 ![Python](https://img.shields.io/badge/python-≥3.8-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -172,7 +172,7 @@ If you use this software in your research, please cite:
   author={Rayhan, MD and Liu, Bingqian},
   year={2025},
   url={https://github.com/RAY186B/Pb-PEC-Calibration-Framework},
-  doi={10.5281/zenodo.17212395},
+  doi={10.5281/zenodo.17220484},
   version={1.0.0}
 }
 ```
