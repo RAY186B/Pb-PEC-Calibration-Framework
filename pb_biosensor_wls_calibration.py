@@ -7,7 +7,7 @@ Weighted Least Squares calibration for Pb²⁺ biosensor data with LOD/LOQ calcu
 CITATION:
 MD Rayhan & Bingqian Liu (2025).
 Pb²⁺ Biosensor Calibration Script.
-Zenodo. https://doi.org/10.5281/zenodo.17212395
+Zenodo. https://doi.org/10.5281/zenodo.17218702
 
 Dependencies:
 - Python ≥ 3.8
