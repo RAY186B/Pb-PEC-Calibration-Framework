@@ -1,12 +1,43 @@
-# Pb²⁺ Biosensor Calibration Script
+```markdown
+# Pb-PEC-Calibration-Framework  
+Weighted-least-squares calibration & LOD/LOQ calculator for Pb²⁺ PEC-sensor data.
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17212395.svg)](https://doi.org/10.5281/zenodo.17212395)
-![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen)
+## Citation  
+MD Rayhan & Bingqian Liu (2025).  
+*Pb²⁺ Biosensor Calibration Script*.  
+Zenodo http://doi.org/10.5281/zenodo.17212395
 
-## Purpose
-Calibrates Pb²⁺ biosensor data using Weighted Least Squares (WLS) regression, IUPAC LOD/LOQ, and diagnostic plots. Minimal version in `pb_biosensor_wls_calibration.py`; full version with detailed comments at https://github.com/RAY186B/Pb-PEC-Calibration-Framework
-
-## Installation
+## Installation  
 ```bash
+git clone https://github.com/RAY186B/Pb-PEC-Calibration-Framework.git
+cd Pb-PEC-Calibration-Framework
 pip install -r requirements.txt
-pip install -r requirements-dev.txt  # For testing
+```
+
+Usage  
+
+```bash
+# quick sanity check with synthetic data
+python calibrate.py --demo
+
+# real calibration
+python calibrate.py your_data.csv --unit ng/mL --outdir results
+```
+
+Run `python calibrate.py -h` for all options.
+
+Input CSV (minimal)  
+
+Sample	Added_ng_mL	PEC_found_ng_mL	RSD_percent	
+Tap water	0	0.001	4.5	
+Tap water	1	1.05	3.2	
+
+Outputs  
+- `calibration_results.csv` – full statistics  
+- `simple_results.csv` – slope, LOD, LOQ, R²  
+- `*/calibration_plot.png` – one plot per sample
+
+License  
+MIT
+
+```
